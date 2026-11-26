@@ -1,69 +1,53 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ARBAEEN_PHASES, ARBAEEN_PROMPTS, DAILY_HABITS } from '../lib/constants';
-import { generateArbaeenMarkdown } from '../lib/engine';
+import { computeArbaeenStreak, generateArbaeenMarkdown } from '../lib/engine';
 
-const SOLITUDE_SECONDS = 45 * 60;
+const DEFAULT_SECONDS = 45 * 60;
 
 export default function ArbaeenView({ state, onUpdateDay }) {
-  const [activeDay, setActiveDay] = useState(1);
-  const [secondsLeft, setSecondsLeft] = useState(SOLITUDE_SECONDS);
-  const [isRunning, setIsRunning] = useState(false);
-  const endTimestampRef = useRef(null);
+  const [selectedDay, setSelectedDay] = useState(1);
+  const [phaseFilter, setPhaseFilter] = useState(0); // 0 = الكل
+  const [showArchive, setShowArchive] = useState(false);
 
-  const dayKey = String(activeDay);
+  const [secondsLeft, setSecondsLeft] = useState(DEFAULT_SECONDS);
+  const [running, setRunning] = useState(false);
+  const endTimeRef = useRef(null);
+
+  useEffect(() => {
+    if (!running) return;
+    endTimeRef.current = Date.now() + secondsLeft * 1000;
+    const id = setInterval(() => {
+      const remaining = Math.max(0, Math.round((endTimeRef.current - Date.now()) / 1000));
+      setSecondsLeft(remaining);
+      if (remaining === 0) {
+        setRunning(false);
+        clearInterval(id);
+      }
+    }, 500);
+    return () => clearInterval(id);
+  }, [running]);
+
+  const completedCount = useMemo(
+    () => Object.values(state.arbaeen).filter((d) => d?.done).length,
+    [state.arbaeen]
+  );
+
+  const streak = useMemo(() => computeArbaeenStreak(state.arbaeen), [state.arbaeen]);
+
+  const dayKey = String(selectedDay);
   const currentEntry = state.arbaeen[dayKey] || {
     done: false,
     answer: '',
     habits: { noScroll: false, solitude: false, honestWrite: false },
   };
 
-  // مؤقت دقيق يعتمد على Date.now() حتى لو كان التاب في الخلفية
-  useEffect(() => {
-    if (!isRunning) return;
-    const id = setInterval(() => {
-      if (!endTimestampRef.current) return;
-      const remaining = Math.max(0, Math.ceil((endTimestampRef.current - Date.now()) / 1000));
-      setSecondsLeft(remaining);
-      if (remaining === 0) {
-        setIsRunning(false);
-        endTimestampRef.current = null;
-      }
-    }, 250);
-    return () => clearInterval(id);
-  }, [isRunning]);
-
-  const toggleTimer = () => {
-    if (isRunning) {
-      setIsRunning(false);
-      endTimestampRef.current = null;
-    } else {
-      const base = secondsLeft === 0 ? SOLITUDE_SECONDS : secondsLeft;
-      endTimestampRef.current = Date.now() + base * 1000;
-      setSecondsLeft(base);
-      setIsRunning(true);
-    }
-  };
-
-  const resetTimer = () => {
-    setIsRunning(false);
-    endTimestampRef.current = null;
-    setSecondsLeft(SOLITUDE_SECONDS);
-  };
-
-  const formatTime = (sec) => {
-    const m = String(Math.floor(sec / 60)).padStart(2, '0');
-    const s = String(sec % 60).padStart(2, '0');
-    return `${m}:${s}`;
-  };
-
-  const completedCount = Object.values(state.arbaeen).filter((d) => d?.done).length;
   const currentPhase = ARBAEEN_PHASES.find(
-    (p) => activeDay >= p.range[0] && activeDay <= p.range[1]
+    (p) => selectedDay >= p.range[0] && selectedDay <= p.range[1]
   );
 
-  const updateField = (patch) => {
+  const updateCurrent = (patch) => {
     onUpdateDay(dayKey, {
       ...currentEntry,
       ...patch,
@@ -71,49 +55,62 @@ export default function ArbaeenView({ state, onUpdateDay }) {
     });
   };
 
-  const toggleHabit = (habitId) => {
-    updateField({
-      habits: {
-        ...currentEntry.habits,
-        [habitId]: !currentEntry.habits?.[habitId],
-      },
-    });
-  };
-
-  const downloadMarkdown = () => {
+  const handleExportMd = () => {
     const md = generateArbaeenMarkdown(state.arbaeen);
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `arbaeen-document-${state.year}.md`;
+    a.download = `arbaeen-journal-${new Date().toISOString().slice(0, 10)}.md`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
+  const mm = String(Math.floor(secondsLeft / 60)).padStart(2, '0');
+  const ss = String(secondsLeft % 60).padStart(2, '0');
+
+  const visibleDays = Array.from({ length: 40 }, (_, i) => i + 1).filter((d) => {
+    if (phaseFilter === 0) return true;
+    const ph = ARBAEEN_PHASES.find((p) => p.id === phaseFilter);
+    return ph ? d >= ph.range[0] && d <= ph.range[1] : true;
+  });
+
+  const answeredList = Object.entries(state.arbaeen)
+    .filter(([, v]) => v?.answer?.trim())
+    .sort(([a], [b]) => Number(b) - Number(a));
+
   return (
     <div className="stack-lg">
-      {/* شريط التقدم والتايمر */}
+      {/* شريط التقدم + Streak + التايمر */}
       <div className="two-col">
-        <div className="card">
-          <div className="card-head">
-            <h2>تقدم تحدي الأربعين</h2>
-            <strong className="mono green">{completedCount} / 40 يوم</strong>
+        <div className="card stack-sm">
+          <div className="card-head" style={{ marginBottom: 4 }}>
+            <h2>تحدي الأربعين</h2>
+            <div className="chip-row">
+              <span className="badge up mono">{completedCount}/40</span>
+              <span className="badge up mono">سلسلة: {streak} يوم</span>
+            </div>
           </div>
           <div className="progress-track">
-            <div
-              className="progress-fill"
-              style={{ width: `${(completedCount / 40) * 100}%` }}
-            />
+            <div className="progress-fill" style={{ width: `${(completedCount / 40) * 100}%` }} />
           </div>
-          <div className="phase-pills">
+          <div className="chip-row">
+            <button
+              type="button"
+              className={`chip ${phaseFilter === 0 ? 'active' : ''}`}
+              onClick={() => setPhaseFilter(0)}
+            >
+              كل المراحل
+            </button>
             {ARBAEEN_PHASES.map((p) => (
-              <span
+              <button
                 key={p.id}
-                className={`xs phase-tag ${currentPhase?.id === p.id ? 'active' : ''}`}
+                type="button"
+                className={`chip ${phaseFilter === p.id ? 'active' : ''}`}
+                onClick={() => setPhaseFilter(p.id)}
               >
-                {p.id}. {p.title} ({p.range[0]}-{p.range[1]})
-              </span>
+                {p.id}. {p.title}
+              </button>
             ))}
           </div>
         </div>
@@ -121,92 +118,134 @@ export default function ArbaeenView({ state, onUpdateDay }) {
         <div className="card timer-card">
           <div>
             <span className="xs muted">مؤقت الخلوة اليومية (45 دقيقة بلا مشتتات)</span>
-            <div className="mono timer-display">{formatTime(secondsLeft)}</div>
+            <div className="mono timer-display">{mm}:{ss}</div>
           </div>
           <div className="actions-row">
-            <button type="button" className="btn btn-primary" onClick={toggleTimer}>
-              {isRunning ? 'إيقاف مؤقت' : 'بدء الخلوة'}
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setRunning((r) => !r)}
+            >
+              {running ? 'إيقاف مؤقت' : 'بدء الخلوة'}
             </button>
-            <button type="button" className="btn btn-ghost" onClick={resetTimer}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setRunning(false);
+                setSecondsLeft(DEFAULT_SECONDS);
+              }}
+            >
               إعادة ضبط
             </button>
-            <button type="button" className="btn btn-ghost" onClick={downloadMarkdown}>
-              تصدير الوثيقة (.md)
+            <button type="button" className="btn btn-ghost" onClick={handleExportMd}>
+              تصدير (.md)
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setShowArchive((s) => !s)}
+            >
+              {showArchive ? 'إخفاء الأرشيف' : `مراجعة إجاباتي (${answeredList.length})`}
             </button>
           </div>
         </div>
       </div>
 
-      {/* المصفوفة + محرر اليوم */}
-      <div className="two-col">
-        <div className="card">
-          <div className="card-head">
-            <h2>مصفوفة الـ 40 يوماً</h2>
-            <span className="xs muted">اختر اليوم</span>
+      {/* أرشيف المقارنة ومراجعة الإجابات السابقة */}
+      {showArchive && (
+        <div className="card stack-sm">
+          <h2>مراجعة إجاباتك السابقة</h2>
+          {answeredList.length === 0 ? (
+            <p className="xs muted">لم تكتب أي إجابة بعد.</p>
+          ) : (
+            answeredList.map(([d, entry]) => (
+              <div key={d} className="journal-card stack-sm">
+                <div className="card-head" style={{ marginBottom: 0 }}>
+                  <strong className="green">اليوم {d}: {ARBAEEN_PROMPTS[Number(d) - 1]}</strong>
+                  <span className="xs mono muted">{entry.updatedAt}</span>
+                </div>
+                <p className="plan-text">{entry.answer}</p>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* مصفوفة الأيام */}
+      <div className="card">
+        <div className="card-head">
+          <h2>مصفوفة الأربعين يوماً</h2>
+          <span className="xs muted">الأخضر = مكتمل • الأصفر = مسودة</span>
+        </div>
+        <div className="days-grid">
+          {visibleDays.map((day) => {
+            const entry = state.arbaeen[String(day)];
+            const isDone = Boolean(entry?.done);
+            const hasDraft = !isDone && Boolean(entry?.answer?.trim());
+            return (
+              <button
+                key={day}
+                type="button"
+                onClick={() => setSelectedDay(day)}
+                className={`day-cell mono ${isDone ? 'day-done' : hasDraft ? 'day-draft' : ''} ${
+                  selectedDay === day ? 'day-active' : ''
+                }`}
+              >
+                {day}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* بطاقة اليوم النشط */}
+      <div className="card stack-md">
+        <div className="card-head">
+          <div>
+            <span className="xs muted">
+              المرحلة {currentPhase?.id}: {currentPhase?.title}
+            </span>
+            <h2>اليوم {selectedDay}</h2>
           </div>
-          <div className="days-grid">
-            {Array.from({ length: 40 }, (_, i) => i + 1).map((day) => {
-              const entry = state.arbaeen[String(day)];
-              const hasDraft = Boolean(entry?.answer?.trim());
-              return (
-                <button
-                  key={day}
-                  type="button"
-                  onClick={() => setActiveDay(day)}
-                  className={`day-cell mono ${
-                    entry?.done ? 'day-done' : hasDraft ? 'day-draft' : ''
-                  } ${activeDay === day ? 'day-active' : ''}`}
-                >
-                  {day}
-                </button>
-              );
-            })}
-          </div>
+          <button
+            type="button"
+            className={`btn ${currentEntry.done ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => updateCurrent({ done: !currentEntry.done })}
+          >
+            {currentEntry.done ? 'مكتمل ✓' : 'تحديد كمكتمل'}
+          </button>
         </div>
 
-        <div className="card stack-md">
-          <div className="card-head">
-            <div>
-              <span className="xs muted">
-                المرحلة {currentPhase?.id}: {currentPhase?.title}
-              </span>
-              <h2>اليوم {activeDay}</h2>
-            </div>
-            <button
-              type="button"
-              onClick={() => updateField({ done: !currentEntry.done })}
-              className={`btn ${currentEntry.done ? 'btn-primary' : 'btn-ghost'}`}
-            >
-              {currentEntry.done ? 'مكتمل ✓' : 'تحديد كمكتمل'}
-            </button>
-          </div>
+        <div className="prompt-box">{ARBAEEN_PROMPTS[selectedDay - 1]}</div>
 
-          <blockquote className="prompt-box">{ARBAEEN_PROMPTS[activeDay - 1]}</blockquote>
+        <div className="habits-row">
+          {DAILY_HABITS.map((h) => (
+            <label key={h.id} className="habit-check">
+              <input
+                type="checkbox"
+                checked={Boolean(currentEntry.habits?.[h.id])}
+                onChange={(e) =>
+                  updateCurrent({
+                    habits: { ...currentEntry.habits, [h.id]: e.target.checked },
+                  })
+                }
+              />
+              <span>{h.label}</span>
+            </label>
+          ))}
+        </div>
 
-          <div className="habits-row">
-            {DAILY_HABITS.map((h) => (
-              <label key={h.id} className="habit-check">
-                <input
-                  type="checkbox"
-                  checked={Boolean(currentEntry.habits?.[h.id])}
-                  onChange={() => toggleHabit(h.id)}
-                />
-                <span>{h.label}</span>
-              </label>
-            ))}
-          </div>
-
-          <div className="field">
-            <label htmlFor="arbaeen-answer">إجابتك الصريحة (تُحفظ تلقائياً)</label>
-            <textarea
-              id="arbaeen-answer"
-              rows={8}
-              value={currentEntry.answer || ''}
-              onChange={(e) => updateField({ answer: e.target.value })}
-              placeholder="اكتب لنفسك فقط — بلا تجميل ولا شعارات..."
-              className="textarea"
-            />
-          </div>
+        <div className="field">
+          <label htmlFor="arbaeen-answer">إجابتك الصريحة (تُحفظ تلقائياً)</label>
+          <textarea
+            id="arbaeen-answer"
+            rows={7}
+            value={currentEntry.answer}
+            onChange={(e) => updateCurrent({ answer: e.target.value })}
+            placeholder="اكتب لنفسك فقط — بلا تجميل ولا شعارات..."
+            className="textarea"
+          />
         </div>
       </div>
     </div>
