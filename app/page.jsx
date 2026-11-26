@@ -1,8 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Sidebar from '../components/Sidebar';
 import LifeIndexView from '../components/LifeIndexView';
+import DailyCheckinView from '../components/DailyCheckinView';
+import SectorDetailView from '../components/SectorDetailView';
 import ArbaeenView from '../components/ArbaeenView';
+import JournalView from '../components/JournalView';
 import SettingsView from '../components/SettingsView';
 import AuthModal from '../components/AuthModal';
 import {
@@ -14,25 +18,25 @@ import {
   saveLocalState,
 } from '../lib/storage';
 import { isCloudEnabled, supabase } from '../lib/supabase';
-import { computeIndexStats } from '../lib/engine';
+import { computeDashboardStats } from '../lib/engine';
 
 export default function HomePage() {
   const [state, setState] = useState(createEmptyState);
   const [hydrated, setHydrated] = useState(false);
-  const [tab, setTab] = useState('index');
+  const [view, setView] = useState('daily');
+  const [activeSectorId, setActiveSectorId] = useState('prayer');
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // حالة السحابة وتسجيل الدخول
   const [user, setUser] = useState(null);
   const [syncStatus, setSyncStatus] = useState('محلي');
   const [authOpen, setAuthOpen] = useState(false);
+  const cloudLoadedRef = useRef(false);
   const syncTimerRef = useRef(null);
 
-  // قفل PIN المحلي
   const [locked, setLocked] = useState(false);
   const [pinAttempt, setPinAttempt] = useState('');
   const [pinErr, setPinErr] = useState(false);
 
-  // التحميل الأولي + مراقبة جلسة Supabase
   useEffect(() => {
     setState(loadLocalState());
     if (getSavedPin()) setLocked(true);
@@ -40,45 +44,42 @@ export default function HomePage() {
 
     if (!isCloudEnabled || !supabase) return;
 
-    supabase.auth.getSession().then(async ({ data }) => {
+    const pullCloud = async (u) => {
+      if (!u) {
+        cloudLoadedRef.current = false;
+        setSyncStatus('محلي');
+        return;
+      }
+      setSyncStatus('جارٍ المزامنة...');
+      const cloud = await loadCloudState(u.id);
+      if (cloud) {
+        setState(cloud);
+        saveLocalState(cloud);
+      }
+      cloudLoadedRef.current = true;
+      setSyncStatus('متزامن ✓');
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
       const u = data?.session?.user || null;
       setUser(u);
-      if (u) {
-        setSyncStatus('جارٍ المزامنة...');
-        const cloud = await loadCloudState(u.id);
-        if (cloud) {
-          setState(cloud);
-          saveLocalState(cloud);
-        }
-        setSyncStatus('متزامن ✓');
-      }
+      pullCloud(u);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       const u = session?.user || null;
       setUser(u);
-      if (u) {
-        setSyncStatus('جارٍ المزامنة...');
-        const cloud = await loadCloudState(u.id);
-        if (cloud) {
-          setState(cloud);
-          saveLocalState(cloud);
-        }
-        setSyncStatus('متزامن ✓');
-      } else {
-        setSyncStatus('محلي');
-      }
+      pullCloud(u);
     });
 
     return () => listener?.subscription?.unsubscribe();
   }, []);
 
-  // حفظ محلي فوري + مزامنة سحابية بـ debounce عند تسجيل الدخول
   useEffect(() => {
     if (!hydrated) return;
     saveLocalState(state);
 
-    if (isCloudEnabled && user) {
+    if (isCloudEnabled && user && cloudLoadedRef.current) {
       setSyncStatus('جارٍ الحفظ...');
       clearTimeout(syncTimerRef.current);
       syncTimerRef.current = setTimeout(async () => {
@@ -88,26 +89,15 @@ export default function HomePage() {
     }
   }, [state, hydrated, user]);
 
-  const stats = useMemo(
-    () => computeIndexStats(state.weeks, state.weights, state.arbaeen),
-    [state.weeks, state.weights, state.arbaeen]
-  );
-
+  const stats = useMemo(() => computeDashboardStats(state), [state]);
   const arbaeenDone = useMemo(
     () => Object.values(state.arbaeen).filter((d) => d?.done).length,
     [state.arbaeen]
   );
 
-  const handleUnlock = (e) => {
-    e.preventDefault();
-    if (pinAttempt === getSavedPin()) {
-      setLocked(false);
-      setPinAttempt('');
-      setPinErr(false);
-    } else {
-      setPinErr(true);
-      setPinAttempt('');
-    }
+  const handleNavigate = (nextView, secId = null) => {
+    setView(nextView);
+    if (secId) setActiveSectorId(secId);
   };
 
   if (!hydrated) {
@@ -121,13 +111,26 @@ export default function HomePage() {
   if (locked) {
     return (
       <main className="shell lock-screen">
-        <form className="card lock-card stack-md" onSubmit={handleUnlock}>
+        <form
+          className="card lock-card stack-md"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (pinAttempt === getSavedPin()) {
+              setLocked(false);
+              setPinAttempt('');
+              setPinErr(false);
+            } else {
+              setPinErr(true);
+              setPinAttempt('');
+            }
+          }}
+        >
           <div className="brand" style={{ justifyContent: 'center' }}>
             <span className="dot" />
             <strong>LIFE-IDX</strong>
           </div>
           <p className="xs muted" style={{ textAlign: 'center' }}>
-            أدخل رمز الخصوصية (4 أرقام) لفتح بياناتك
+            أدخل رمز الخصوصية (4 أرقام)
           </p>
           <input
             type="password"
@@ -140,100 +143,122 @@ export default function HomePage() {
             style={{ textAlign: 'center', fontSize: '1.4rem', letterSpacing: '0.4rem' }}
           />
           {pinErr && <div className="alert alert-err">الرمز غير صحيح</div>}
-          <button type="submit" className="btn btn-primary">
-            فتح
-          </button>
+          <button type="submit" className="btn btn-primary">فتح</button>
         </form>
       </main>
     );
   }
 
   return (
-    <div className="shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="dot" />
-          <strong>LIFE-IDX</strong>
-          <span className="mono xs muted">{state.year}</span>
-        </div>
+    <div className="app-layout">
+      <Sidebar
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        view={view}
+        activeSectorId={activeSectorId}
+        onNavigate={handleNavigate}
+        stats={stats}
+        arbaeenDone={arbaeenDone}
+        user={user}
+        syncStatus={syncStatus}
+        onOpenAuth={() => setAuthOpen(true)}
+      />
 
-        <div className="ticker mono xs">
-          <span>
-            IDX: <strong>{stats.current}</strong>
-          </span>
-          <span className={stats.delta >= 0 ? 'green' : 'red'}>
-            {stats.delta >= 0 ? `▲ +${stats.delta}` : `▼ ${stats.delta}`}
-          </span>
-          <span>ARBAEEN: {arbaeenDone}/40</span>
+      <div className="main-area">
+        <header className="mobile-bar">
+          <button type="button" className="menu-btn" onClick={() => setDrawerOpen(true)}>
+            ☰
+          </button>
+          <div className="brand">
+            <span className="dot" />
+            <strong>LIFE-IDX</strong>
+          </div>
           <button type="button" className="sync-pill" onClick={() => setAuthOpen(true)}>
             {user ? `☁ ${syncStatus}` : '☁ السحابة'}
           </button>
-        </div>
+        </header>
 
-        <nav className="tabs">
-          <button
-            type="button"
-            className={`tab ${tab === 'index' ? 'active' : ''}`}
-            onClick={() => setTab('index')}
-          >
-            مؤشر السنة
-          </button>
-          <button
-            type="button"
-            className={`tab ${tab === 'arbaeen' ? 'active' : ''}`}
-            onClick={() => setTab('arbaeen')}
-          >
-            تحدي أربعين
-          </button>
-          <button
-            type="button"
-            className={`tab ${tab === 'settings' ? 'active' : ''}`}
-            onClick={() => setTab('settings')}
-          >
-            الأوزان والسجل
-          </button>
-        </nav>
-      </header>
+        <main className="main-content">
+          {view === 'daily' && (
+            <DailyCheckinView
+              state={state}
+              onSaveDaily={(dateKey, entry) =>
+                setState((prev) => ({
+                  ...prev,
+                  dailyLogs: { ...prev.dailyLogs, [dateKey]: entry },
+                }))
+              }
+            />
+          )}
 
-      <main className="content">
-        {tab === 'index' && (
-          <LifeIndexView
-            state={state}
-            onSaveWeek={(weekEntry) =>
-              setState((prev) => ({
-                ...prev,
-                weeks: [...prev.weeks.filter((w) => w.week !== weekEntry.week), weekEntry],
-              }))
-            }
-            onJumpToDay37={() => setTab('arbaeen')}
-          />
-        )}
-        {tab === 'arbaeen' && (
-          <ArbaeenView
-            state={state}
-            onUpdateDay={(dayKey, entry) =>
-              setState((prev) => ({
-                ...prev,
-                arbaeen: { ...prev.arbaeen, [dayKey]: entry },
-              }))
-            }
-          />
-        )}
-        {tab === 'settings' && (
-          <SettingsView
-            state={state}
-            onUpdateWeights={(weights) => setState((prev) => ({ ...prev, weights }))}
-            onDeleteWeek={(weekNum) =>
-              setState((prev) => ({
-                ...prev,
-                weeks: prev.weeks.filter((w) => w.week !== weekNum),
-              }))
-            }
-            onImportState={(nextState) => setState(nextState)}
-            onResetClean={() => setState(createEmptyState())}
-          />
-        )}
-      </main>
+          {view === 'dashboard' && (
+            <LifeIndexView
+              state={state}
+              onGoDaily={() => handleNavigate('daily')}
+              onSelectSector={(id) => handleNavigate('sector', id)}
+              onJumpToDay37={() => handleNavigate('arbaeen')}
+            />
+          )}
+
+          {view === 'sector' && (
+            <SectorDetailView
+              state={state}
+              sectorId={activeSectorId}
+              onSelectSector={(id) => setActiveSectorId(id)}
+              onUpdateTasks={(secId, tasks) =>
+                setState((prev) => ({
+                  ...prev,
+                  sectorTasks: { ...prev.sectorTasks, [secId]: tasks },
+                }))
+              }
+            />
+          )}
+
+          {view === 'arbaeen' && (
+            <ArbaeenView
+              state={state}
+              onUpdateDay={(dayKey, entry) =>
+                setState((prev) => ({
+                  ...prev,
+                  arbaeen: { ...prev.arbaeen, [dayKey]: entry },
+                }))
+              }
+            />
+          )}
+
+          {view === 'journal' && (
+            <JournalView
+              state={state}
+              onAddJournal={(entry) =>
+                setState((prev) => ({ ...prev, journal: [entry, ...(prev.journal || [])] }))
+              }
+              onDeleteJournal={(id) =>
+                setState((prev) => ({
+                  ...prev,
+                  journal: (prev.journal || []).filter((j) => j.id !== id),
+                }))
+              }
+            />
+          )}
+
+          {view === 'settings' && (
+            <SettingsView
+              state={state}
+              onUpdateWeights={(weights) => setState((prev) => ({ ...prev, weights }))}
+              onDeleteDay={(dateKey) =>
+                setState((prev) => {
+                  const next = { ...prev.dailyLogs };
+                  delete next[dateKey];
+                  return { ...prev, dailyLogs: next };
+                })
+              }
+              onImportState={(nextState) => setState(nextState)}
+              onResetClean={() => setState(createEmptyState())}
+              onOpenAuth={() => setAuthOpen(true)}
+            />
+          )}
+        </main>
+      </div>
 
       <AuthModal
         open={authOpen}
