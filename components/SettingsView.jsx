@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
-import { SECTORS } from '../lib/constants';
-import { calcWeightedScore, getSortedWeeks } from '../lib/engine';
-import { validateState } from '../lib/storage';
+import { useEffect, useState } from 'react';
+import { PILLARS, SUBSECTORS } from '../lib/constants';
+import { calcPillarScores, calcWeightedScore, getSortedWeeks } from '../lib/engine';
+import { getSavedPin, setSavedPin, validateState } from '../lib/storage';
 
 export default function SettingsView({
   state,
@@ -14,6 +14,16 @@ export default function SettingsView({
 }) {
   const [draftWeights, setDraftWeights] = useState({ ...state.weights });
   const [statusMsg, setStatusMsg] = useState({ type: '', text: '' });
+  const [pinDraft, setPinDraft] = useState('');
+  const [hasPin, setHasPin] = useState(false);
+
+  useEffect(() => {
+    setDraftWeights({ ...state.weights });
+  }, [state.weights]);
+
+  useEffect(() => {
+    setHasPin(Boolean(getSavedPin()));
+  }, []);
 
   const totalWeight = Object.values(draftWeights).reduce((acc, v) => acc + Number(v || 0), 0);
 
@@ -24,7 +34,25 @@ export default function SettingsView({
       return;
     }
     onUpdateWeights(draftWeights);
-    setStatusMsg({ type: 'ok', text: 'تم تحديث الأوزان وإعادة حساب تاريخ المؤشر.' });
+    setStatusMsg({ type: 'ok', text: 'تم تحديث أوزان الـ 15 قطاعاً وإعادة حساب التاريخ.' });
+  };
+
+  const handleSavePin = (e) => {
+    e.preventDefault();
+    if (!/^\d{4}$/.test(pinDraft)) {
+      setStatusMsg({ type: 'error', text: 'الرمز السري (PIN) يجب أن يتكون من 4 أرقام بالضبط.' });
+      return;
+    }
+    setSavedPin(pinDraft);
+    setHasPin(true);
+    setPinDraft('');
+    setStatusMsg({ type: 'ok', text: 'تم تفعيل قفل الخصوصية المحلي بنجاح.' });
+  };
+
+  const handleDisablePin = () => {
+    setSavedPin('');
+    setHasPin(false);
+    setStatusMsg({ type: 'ok', text: 'تم إلغاء قفل الخصوصية المحلي.' });
   };
 
   const handleExportJson = () => {
@@ -49,7 +77,6 @@ export default function SettingsView({
         return;
       }
       onImportState(check.data);
-      setDraftWeights({ ...check.data.weights });
       setStatusMsg({ type: 'ok', text: 'تم التحقق من الملف واستيراد البيانات بنجاح.' });
     } catch {
       setStatusMsg({ type: 'error', text: 'ملف JSON غير صالح أو تالف.' });
@@ -62,90 +89,127 @@ export default function SettingsView({
 
   return (
     <div className="stack-lg">
-      <div className="two-col">
-        {/* تعديل الأوزان */}
-        <form className="card stack-md" onSubmit={handleSaveWeights}>
-          <div className="card-head">
-            <h2>أوزان القطاعات النسبية</h2>
-            <span className={`mono badge ${totalWeight === 100 ? 'up' : 'down'}`}>
-              المجموع: {totalWeight}%
-            </span>
-          </div>
+      {statusMsg.text && (
+        <div className={`alert ${statusMsg.type === 'error' ? 'alert-err' : 'alert-ok'}`}>
+          {statusMsg.text}
+        </div>
+      )}
 
-          <div className="stack-sm">
-            {SECTORS.map((s) => (
-              <div key={s.id} className="field-inline">
-                <label htmlFor={`w-${s.id}`}>{s.name}</label>
-                <input
-                  id={`w-${s.id}`}
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={draftWeights[s.id]}
-                  onChange={(e) =>
-                    setDraftWeights((prev) => ({
-                      ...prev,
-                      [s.id]: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
-                    }))
-                  }
-                  className="input mono"
-                  style={{ width: '90px' }}
-                />
+      {/* تعديل أوزان الـ 15 قطاعاً */}
+      <form className="card stack-md" onSubmit={handleSaveWeights}>
+        <div className="card-head">
+          <h2>أوزان الـ 15 قطاعاً (مجمّعة حسب المحور)</h2>
+          <span className={`mono badge ${totalWeight === 100 ? 'up' : 'down'}`}>
+            المجموع: {totalWeight}%
+          </span>
+        </div>
+
+        <div className="pillars-form-grid">
+          {PILLARS.map((pillar) => {
+            const subs = SUBSECTORS.filter((s) => s.pillarId === pillar.id);
+            const subTotal = subs.reduce((acc, s) => acc + Number(draftWeights[s.id] || 0), 0);
+            return (
+              <div key={pillar.id} className="pillar-box stack-sm">
+                <div className="pillar-head" style={{ borderRightColor: pillar.color }}>
+                  <strong>{pillar.name}</strong>
+                  <span className="xs mono muted">{subTotal}%</span>
+                </div>
+                {subs.map((s) => (
+                  <div key={s.id} className="field-inline" style={{ marginBottom: 0 }}>
+                    <label htmlFor={`w-${s.id}`} className="xs">
+                      {s.name}
+                    </label>
+                    <input
+                      id={`w-${s.id}`}
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={draftWeights[s.id] ?? 0}
+                      onChange={(e) =>
+                        setDraftWeights((prev) => ({
+                          ...prev,
+                          [s.id]: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
+                        }))
+                      }
+                      className="input mono"
+                      style={{ width: '74px' }}
+                    />
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            );
+          })}
+        </div>
 
+        <div>
           <button type="submit" className="btn btn-primary" disabled={totalWeight !== 100}>
-            حفظ الأوزان
+            حفظ الأوزان الجديدة
           </button>
-        </form>
+        </div>
+      </form>
+
+      <div className="two-col">
+        {/* قفل الخصوصية المحلي */}
+        <div className="card stack-md">
+          <h2>قفل الخصوصية المحلي (PIN)</h2>
+          <p className="xs muted">
+            يحمي كتاباتك الصريحة في تحدي الأربعين عند فتح التطبيق على جهازك حتى في الوضع غير المتصل.
+          </p>
+          {hasPin ? (
+            <div className="actions-row">
+              <span className="xs green">القفل مفعّل حالياً ✓</span>
+              <button type="button" className="btn btn-danger" onClick={handleDisablePin}>
+                إلغاء القفل
+              </button>
+            </div>
+          ) : (
+            <form className="actions-row" onSubmit={handleSavePin}>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                placeholder="4 أرقام"
+                value={pinDraft}
+                onChange={(e) => setPinDraft(e.target.value.replace(/\D/g, ''))}
+                className="input mono"
+                style={{ width: '120px' }}
+              />
+              <button type="submit" className="btn btn-primary">
+                تفعيل القفل
+              </button>
+            </form>
+          )}
+        </div>
 
         {/* النسخ الاحتياطي والبدء النظيف */}
         <div className="card stack-md">
-          <h2>إدارة البيانات والنسخ الاحتياطي</h2>
-          <p className="xs muted">
-            البيانات محفوظة محلياً في المتصفح. خذ نسخة JSON احتياطية كل شهر حتى تنتقل لقاعدة بيانات سحابية.
-          </p>
-
-          <div className="actions-row">
+          <h2>النسخ الاحتياطي والتصفير</h2>
+          <div className="actions-row" style={{ marginTop: 0 }}>
             <button type="button" className="btn btn-primary" onClick={handleExportJson}>
-              تصدير نسخة JSON
+              تصدير JSON
             </button>
-            <label className="btn btn-ghost file-btn">
+            <label className="btn btn-ghost">
               استيراد JSON
               <input type="file" accept="application/json" onChange={handleImportFile} hidden />
             </label>
           </div>
-
           <hr className="divider" />
-
-          <div>
-            <p className="xs muted" style={{ marginBottom: '10px' }}>
-              لمسح البيانات التجريبية والبدء بسنتك الحقيقية من الصفر:
-            </p>
-            <button
-              type="button"
-              className="btn btn-danger"
-              onClick={() => {
-                if (window.confirm('هل أنت متأكد من مسح كل البيانات والبدء من الصفر؟')) {
-                  onResetClean();
-                  setStatusMsg({ type: 'ok', text: 'تم تصفير النظام بنجاح. سنة جديدة نظيفة.' });
-                }
-              }}
-            >
-              بدء نظيف (مسح كل البيانات)
-            </button>
-          </div>
-
-          {statusMsg.text && (
-            <div className={`alert ${statusMsg.type === 'error' ? 'alert-err' : 'alert-ok'}`}>
-              {statusMsg.text}
-            </div>
-          )}
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={() => {
+              if (window.confirm('هل أنت متأكد من مسح كل البيانات والبدء من الصفر؟')) {
+                onResetClean();
+                setStatusMsg({ type: 'ok', text: 'تم تصفير النظام بنجاح. سنة جديدة نظيفة.' });
+              }
+            }}
+          >
+            بدء نظيف (مسح كل البيانات)
+          </button>
         </div>
       </div>
 
-      {/* سجل الأسابيع الكامل */}
+      {/* السجل الأسبوعي */}
       <div className="card">
         <div className="card-head">
           <h2>السجل الأسبوعي ({sortedWeeks.length})</h2>
@@ -161,38 +225,41 @@ export default function SettingsView({
                   <th>الأسبوع</th>
                   <th>التاريخ</th>
                   <th>المؤشر</th>
-                  {SECTORS.map((s) => (
-                    <th key={s.id}>{s.name}</th>
+                  {PILLARS.map((p) => (
+                    <th key={p.id}>{p.name}</th>
                   ))}
                   <th>ملاحظات</th>
                   <th>إجراء</th>
                 </tr>
               </thead>
               <tbody>
-                {sortedWeeks.map((w) => (
-                  <tr key={w.week}>
-                    <td className="mono">W{w.week}</td>
-                    <td className="mono xs muted">{w.date}</td>
-                    <td className="mono green">
-                      <strong>{calcWeightedScore(w.scores, state.weights)}</strong>
-                    </td>
-                    {SECTORS.map((s) => (
-                      <td key={s.id} className="mono">
-                        {w.scores[s.id]}
+                {sortedWeeks.map((w) => {
+                  const pScores = calcPillarScores(w.scores, state.weights);
+                  return (
+                    <tr key={w.week}>
+                      <td className="mono">W{w.week}</td>
+                      <td className="mono xs muted">{w.date}</td>
+                      <td className="mono green">
+                        <strong>{calcWeightedScore(w.scores, state.weights)}</strong>
                       </td>
-                    ))}
-                    <td className="xs note-cell">{w.note || '—'}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn-link red"
-                        onClick={() => onDeleteWeek(w.week)}
-                      >
-                        حذف
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                      {PILLARS.map((p) => (
+                        <td key={p.id} className="mono">
+                          {pScores[p.id]}
+                        </td>
+                      ))}
+                      <td className="xs note-cell">{w.note || '—'}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn-link red"
+                          onClick={() => onDeleteWeek(w.week)}
+                        >
+                          حذف
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
