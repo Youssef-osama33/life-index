@@ -1,16 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { PILLARS, SUBSECTORS } from '../lib/constants';
-import { calcPillarScores, calcWeightedScore, getSortedWeeks } from '../lib/engine';
+import { SECTORS } from '../lib/constants';
+import { computeDailyResult } from '../lib/engine';
 import { getSavedPin, setSavedPin, validateState } from '../lib/storage';
 
 export default function SettingsView({
   state,
   onUpdateWeights,
-  onDeleteWeek,
+  onDeleteDay,
   onImportState,
   onResetClean,
+  onOpenAuth,
 }) {
   const [draftWeights, setDraftWeights] = useState({ ...state.weights });
   const [statusMsg, setStatusMsg] = useState({ type: '', text: '' });
@@ -34,25 +35,19 @@ export default function SettingsView({
       return;
     }
     onUpdateWeights(draftWeights);
-    setStatusMsg({ type: 'ok', text: 'تم تحديث أوزان الـ 15 قطاعاً وإعادة حساب التاريخ.' });
+    setStatusMsg({ type: 'ok', text: 'تم تحديث أوزان القطاعات الـ 10 وإعادة حساب التاريخ.' });
   };
 
   const handleSavePin = (e) => {
     e.preventDefault();
     if (!/^\d{4}$/.test(pinDraft)) {
-      setStatusMsg({ type: 'error', text: 'الرمز السري (PIN) يجب أن يتكون من 4 أرقام بالضبط.' });
+      setStatusMsg({ type: 'error', text: 'الرمز السري (PIN) يجب أن يتكون من 4 أرقام.' });
       return;
     }
     setSavedPin(pinDraft);
     setHasPin(true);
     setPinDraft('');
-    setStatusMsg({ type: 'ok', text: 'تم تفعيل قفل الخصوصية المحلي بنجاح.' });
-  };
-
-  const handleDisablePin = () => {
-    setSavedPin('');
-    setHasPin(false);
-    setStatusMsg({ type: 'ok', text: 'تم إلغاء قفل الخصوصية المحلي.' });
+    setStatusMsg({ type: 'ok', text: 'تم تفعيل قفل الخصوصية المحلي.' });
   };
 
   const handleExportJson = () => {
@@ -60,7 +55,7 @@ export default function SettingsView({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `life-index-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `life-idx-v4-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -69,23 +64,21 @@ export default function SettingsView({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
-      const check = validateState(parsed);
+      const check = validateState(JSON.parse(await file.text()));
       if (!check.ok) {
         setStatusMsg({ type: 'error', text: `فشل الاستيراد: ${check.error}` });
         return;
       }
       onImportState(check.data);
-      setStatusMsg({ type: 'ok', text: 'تم التحقق من الملف واستيراد البيانات بنجاح.' });
+      setStatusMsg({ type: 'ok', text: 'تم استيراد البيانات بنجاح.' });
     } catch {
-      setStatusMsg({ type: 'error', text: 'ملف JSON غير صالح أو تالف.' });
+      setStatusMsg({ type: 'error', text: 'ملف JSON غير صالح.' });
     } finally {
       e.target.value = '';
     }
   };
 
-  const sortedWeeks = getSortedWeeks(state.weeks).reverse();
+  const dailyList = Object.entries(state.dailyLogs || {}).sort(([a], [b]) => b.localeCompare(a));
 
   return (
     <div className="stack-lg">
@@ -95,93 +88,88 @@ export default function SettingsView({
         </div>
       )}
 
-      {/* تعديل أوزان الـ 15 قطاعاً */}
+      {/* أوزان الـ 10 قطاعات */}
       <form className="card stack-md" onSubmit={handleSaveWeights}>
         <div className="card-head">
-          <h2>أوزان الـ 15 قطاعاً (مجمّعة حسب المحور)</h2>
+          <h2>أوزان القطاعات الـ 10</h2>
           <span className={`mono badge ${totalWeight === 100 ? 'up' : 'down'}`}>
             المجموع: {totalWeight}%
           </span>
         </div>
 
         <div className="pillars-form-grid">
-          {PILLARS.map((pillar) => {
-            const subs = SUBSECTORS.filter((s) => s.pillarId === pillar.id);
-            const subTotal = subs.reduce((acc, s) => acc + Number(draftWeights[s.id] || 0), 0);
-            return (
-              <div key={pillar.id} className="pillar-box stack-sm">
-                <div className="pillar-head" style={{ borderRightColor: pillar.color }}>
-                  <strong>{pillar.name}</strong>
-                  <span className="xs mono muted">{subTotal}%</span>
-                </div>
-                {subs.map((s) => (
-                  <div key={s.id} className="field-inline" style={{ marginBottom: 0 }}>
-                    <label htmlFor={`w-${s.id}`} className="xs">
-                      {s.name}
-                    </label>
-                    <input
-                      id={`w-${s.id}`}
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={draftWeights[s.id] ?? 0}
-                      onChange={(e) =>
-                        setDraftWeights((prev) => ({
-                          ...prev,
-                          [s.id]: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
-                        }))
-                      }
-                      className="input mono"
-                      style={{ width: '74px' }}
-                    />
-                  </div>
-                ))}
-              </div>
-            );
-          })}
+          {SECTORS.map((s) => (
+            <div key={s.id} className="field-inline" style={{ marginBottom: 0 }}>
+              <label htmlFor={`w-${s.id}`} className="xs">
+                <span className="sec-dot" style={{ background: s.color, marginLeft: 6 }} />
+                {s.name}
+              </label>
+              <input
+                id={`w-${s.id}`}
+                type="number"
+                min="0"
+                max="100"
+                value={draftWeights[s.id] ?? 0}
+                onChange={(e) =>
+                  setDraftWeights((prev) => ({
+                    ...prev,
+                    [s.id]: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
+                  }))
+                }
+                className="input mono"
+                style={{ width: '74px' }}
+              />
+            </div>
+          ))}
         </div>
 
         <div>
           <button type="submit" className="btn btn-primary" disabled={totalWeight !== 100}>
-            حفظ الأوزان الجديدة
+            حفظ الأوزان
           </button>
         </div>
       </form>
 
       <div className="two-col">
-        {/* قفل الخصوصية المحلي */}
+        {/* الخصوصية والسحابة */}
         <div className="card stack-md">
-          <h2>قفل الخصوصية المحلي (PIN)</h2>
-          <p className="xs muted">
-            يحمي كتاباتك الصريحة في تحدي الأربعين عند فتح التطبيق على جهازك حتى في الوضع غير المتصل.
-          </p>
+          <h2>الخصوصية والمزامنة</h2>
+          <button type="button" className="btn btn-ghost" onClick={onOpenAuth}>
+            إدارة حساب السحابة (Supabase)
+          </button>
+          <hr className="divider" />
           {hasPin ? (
-            <div className="actions-row">
-              <span className="xs green">القفل مفعّل حالياً ✓</span>
-              <button type="button" className="btn btn-danger" onClick={handleDisablePin}>
+            <div className="actions-row" style={{ marginTop: 0 }}>
+              <span className="xs green">قفل الـ PIN مفعّل ✓</span>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => {
+                  setSavedPin('');
+                  setHasPin(false);
+                }}
+              >
                 إلغاء القفل
               </button>
             </div>
           ) : (
-            <form className="actions-row" onSubmit={handleSavePin}>
+            <form className="actions-row" style={{ marginTop: 0 }} onSubmit={handleSavePin}>
               <input
                 type="password"
                 inputMode="numeric"
                 maxLength={4}
-                placeholder="4 أرقام"
+                placeholder="PIN من 4 أرقام"
                 value={pinDraft}
                 onChange={(e) => setPinDraft(e.target.value.replace(/\D/g, ''))}
                 className="input mono"
-                style={{ width: '120px' }}
+                style={{ width: '130px' }}
               />
-              <button type="submit" className="btn btn-primary">
-                تفعيل القفل
-              </button>
+              <button type="submit" className="btn btn-primary">تفعيل القفل</button>
             </form>
           )}
         </div>
 
-        {/* النسخ الاحتياطي والبدء النظيف */}
+        {/* النسخ الاحتياطي */}
         <div className="card stack-md">
           <h2>النسخ الاحتياطي والتصفير</h2>
           <div className="actions-row" style={{ marginTop: 0 }}>
@@ -200,7 +188,7 @@ export default function SettingsView({
             onClick={() => {
               if (window.confirm('هل أنت متأكد من مسح كل البيانات والبدء من الصفر؟')) {
                 onResetClean();
-                setStatusMsg({ type: 'ok', text: 'تم تصفير النظام بنجاح. سنة جديدة نظيفة.' });
+                setStatusMsg({ type: 'ok', text: 'تم تصفير النظام بنجاح.' });
               }
             }}
           >
@@ -209,50 +197,37 @@ export default function SettingsView({
         </div>
       </div>
 
-      {/* السجل الأسبوعي */}
+      {/* سجل الأيام المحفوظة */}
       <div className="card">
         <div className="card-head">
-          <h2>السجل الأسبوعي ({sortedWeeks.length})</h2>
+          <h2>سجل التقييمات اليومية ({dailyList.length})</h2>
         </div>
-
-        {sortedWeeks.length === 0 ? (
-          <div className="empty-box">لا توجد سجلات أسبوعية حتى الآن.</div>
+        {dailyList.length === 0 ? (
+          <div className="empty-box">لا توجد أيام مسجّلة حتى الآن.</div>
         ) : (
           <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>الأسبوع</th>
                   <th>التاريخ</th>
-                  <th>المؤشر</th>
-                  {PILLARS.map((p) => (
-                    <th key={p.id}>{p.name}</th>
-                  ))}
-                  <th>ملاحظات</th>
+                  <th>الدرجة</th>
+                  <th>ملاحظة</th>
                   <th>إجراء</th>
                 </tr>
               </thead>
               <tbody>
-                {sortedWeeks.map((w) => {
-                  const pScores = calcPillarScores(w.scores, state.weights);
+                {dailyList.map(([date, log]) => {
+                  const res = computeDailyResult(log.answers, state.weights);
                   return (
-                    <tr key={w.week}>
-                      <td className="mono">W{w.week}</td>
-                      <td className="mono xs muted">{w.date}</td>
-                      <td className="mono green">
-                        <strong>{calcWeightedScore(w.scores, state.weights)}</strong>
-                      </td>
-                      {PILLARS.map((p) => (
-                        <td key={p.id} className="mono">
-                          {pScores[p.id]}
-                        </td>
-                      ))}
-                      <td className="xs note-cell">{w.note || '—'}</td>
+                    <tr key={date}>
+                      <td className="mono">{date}</td>
+                      <td className="mono green"><strong>{res.total}</strong></td>
+                      <td className="xs note-cell">{log.note || '—'}</td>
                       <td>
                         <button
                           type="button"
                           className="btn-link red"
-                          onClick={() => onDeleteWeek(w.week)}
+                          onClick={() => onDeleteDay(date)}
                         >
                           حذف
                         </button>
