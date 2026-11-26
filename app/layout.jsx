@@ -2,7 +2,17 @@ import './globals.css';
 
 export const metadata = {
   title: 'LIFE-IDX | مؤشر السنة وتحدي الأربعين',
-  description: 'لوحة قياس الأداء الأسبوعي وتحدي الأربعين للمراجعة الذاتية',
+  description: 'لوحة قياس الأداء الأسبوعي لـ 15 قطاعاً وتحدي الأربعين للمراجعة الذاتية',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'LIFE-IDX',
+  },
+};
+
+export const viewport = {
+  themeColor: '#030303',
 };
 
 export default function RootLayout({ children }) {
@@ -16,6 +26,7 @@ export default function RootLayout({ children }) {
       }}
     >
       <head>
+        <link rel="icon" href="/icon.svg" type="image/svg+xml" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
