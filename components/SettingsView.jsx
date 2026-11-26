@@ -4,6 +4,12 @@ import { useEffect, useState } from 'react';
 import { SECTORS } from '../lib/constants';
 import { computeDailyResult } from '../lib/engine';
 import { getSavedPin, setSavedPin, validateState } from '../lib/storage';
+import {
+  getPushStatus,
+  sendTestPush,
+  subscribeToPush,
+  unsubscribeFromPush,
+} from '../lib/pushClient';
 
 export default function SettingsView({
   state,
@@ -18,15 +24,48 @@ export default function SettingsView({
   const [pinDraft, setPinDraft] = useState('');
   const [hasPin, setHasPin] = useState(false);
 
+  const [pushState, setPushState] = useState({ supported: true, subscribed: false, busy: false });
+
   useEffect(() => {
     setDraftWeights({ ...state.weights });
   }, [state.weights]);
 
   useEffect(() => {
     setHasPin(Boolean(getSavedPin()));
+    getPushStatus().then((res) => setPushState((prev) => ({ ...prev, ...res })));
   }, []);
 
   const totalWeight = Object.values(draftWeights).reduce((acc, v) => acc + Number(v || 0), 0);
+
+  const handleEnablePush = async () => {
+    setPushState((p) => ({ ...p, busy: true }));
+    const res = await subscribeToPush();
+    if (res.ok) {
+      setPushState({ supported: true, subscribed: true, busy: false });
+      setStatusMsg({ type: 'ok', text: 'تم تفعيل الإشعارات على هذا الجهاز بنجاح ✓' });
+    } else {
+      setPushState((p) => ({ ...p, busy: false }));
+      setStatusMsg({ type: 'error', text: res.error });
+    }
+  };
+
+  const handleDisablePush = async () => {
+    setPushState((p) => ({ ...p, busy: true }));
+    await unsubscribeFromPush();
+    setPushState({ supported: true, subscribed: false, busy: false });
+    setStatusMsg({ type: 'ok', text: 'تم إيقاف الإشعارات على هذا الجهاز.' });
+  };
+
+  const handleTestPush = async () => {
+    setPushState((p) => ({ ...p, busy: true }));
+    const res = await sendTestPush();
+    setPushState((p) => ({ ...p, busy: false }));
+    setStatusMsg(
+      res.ok
+        ? { type: 'ok', text: 'تم إرسال إشعار تجريبي — المفروض يوصلك خلال ثوانٍ.' }
+        : { type: 'error', text: res.error }
+    );
+  };
 
   const handleSaveWeights = (e) => {
     e.preventDefault();
@@ -88,6 +127,50 @@ export default function SettingsView({
         </div>
       )}
 
+      {/* بطاقة الإشعارات المجدولة والأذكار */}
+      <div className="card stack-md">
+        <div className="card-head" style={{ marginBottom: 4 }}>
+          <h2>الإشعارات اليومية والأذكار (Web Push)</h2>
+          <span className={`badge ${pushState.subscribed ? 'up' : 'down'}`}>
+            {pushState.subscribed ? 'مفعّلة ✓' : 'غير مفعّلة'}
+          </span>
+        </div>
+        <p className="xs muted">
+          استقبل أذكار الصباح والمساء، نصائح عملية، وتنبيه الساعة 11:30 مساءً لتقييم يومك حتى والتطبيق مغلق. (ثبّت الموقع من Chrome كـ Add to Home screen لأفضل نتيجة).
+        </p>
+        <div className="actions-row" style={{ marginTop: 0 }}>
+          {!pushState.subscribed ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={pushState.busy || !pushState.supported}
+              onClick={handleEnablePush}
+            >
+              {pushState.busy ? 'جارٍ التفعيل...' : 'تفعيل الإشعارات على هذا الجهاز'}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={pushState.busy}
+                onClick={handleTestPush}
+              >
+                إرسال إشعار تجريبي الآن
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={pushState.busy}
+                onClick={handleDisablePush}
+              >
+                إيقاف الإشعارات
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
       {/* أوزان الـ 10 قطاعات */}
       <form className="card stack-md" onSubmit={handleSaveWeights}>
         <div className="card-head">
@@ -131,7 +214,6 @@ export default function SettingsView({
       </form>
 
       <div className="two-col">
-        {/* الخصوصية والسحابة */}
         <div className="card stack-md">
           <h2>الخصوصية والمزامنة</h2>
           <button type="button" className="btn btn-ghost" onClick={onOpenAuth}>
@@ -169,7 +251,6 @@ export default function SettingsView({
           )}
         </div>
 
-        {/* النسخ الاحتياطي */}
         <div className="card stack-md">
           <h2>النسخ الاحتياطي والتصفير</h2>
           <div className="actions-row" style={{ marginTop: 0 }}>
