@@ -1,0 +1,19 @@
+{
+  "name": "LIFE-IDX | مؤشر السنة وتحدي الأربعين",
+  "short_name": "LIFE-IDX",
+  "description": "مؤشر شخصي لقياس 15 قطاعاً في حياتك مع تحدي الأربعين للمراجعة الذاتية",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#030303",
+  "theme_color": "#030303",
+  "dir": "rtl",
+  "lang": "ar",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
