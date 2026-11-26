@@ -1,17 +1,4 @@
-import { Cairo, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
-
-const cairo = Cairo({
-  subsets: ['arabic', 'latin'],
-  weight: ['400', '600', '700', '800'],
-  variable: '--font-cairo',
-});
-
-const jetbrains = JetBrains_Mono({
-  subsets: ['latin'],
-  weight: ['400', '600', '700'],
-  variable: '--font-mono',
-});
 
 export const metadata = {
   title: 'LIFE-IDX | مؤشر السنة وتحدي الأربعين',
@@ -20,7 +7,22 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="ar" dir="rtl" className={`${cairo.variable} ${jetbrains.variable}`}>
+    <html
+      lang="ar"
+      dir="rtl"
+      style={{
+        '--font-cairo': "'Cairo', system-ui, sans-serif",
+        '--font-mono': "'JetBrains Mono', monospace",
+      }}
+    >
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap"
+          rel="stylesheet"
+        />
+      </head>
       <body>{children}</body>
     </html>
   );
