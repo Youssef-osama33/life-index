@@ -533,3 +533,39 @@ h2 {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
+/* تفعيل الوضع الداكن الأصلي لكل عناصر المتصفح والمربعات */
+:root {
+  color-scheme: dark;
+}
+
+/* إصلاح اتجاه الأرقام والعلامات (+0) داخل وضع RTL */
+.badge,
+.ticker span,
+.timer-display {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+/* تلوين مربعات العادات في تحدي أربعين */
+.habit-check input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* تثبيت التبويبات الثلاثة في سطر واحد متساوي على الموبايل */
+@media (max-width: 600px) {
+  .tabs {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .tab {
+    padding: 8px 4px;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    text-align: center;
+  }
+}
+
