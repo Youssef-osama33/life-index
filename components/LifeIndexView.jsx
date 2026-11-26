@@ -1,30 +1,45 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { SECTORS } from '../lib/constants';
-import { calcWeightedScore, computeIndexStats } from '../lib/engine';
+import { PILLARS, SUBSECTORS } from '../lib/constants';
+import {
+  calcWeightedScore,
+  computeIndexStats,
+  exportSummaryCardPNG,
+  percentToRaw,
+  rawToPercent,
+} from '../lib/engine';
 
-export default function LifeIndexView({ state, onSaveWeek }) {
+function getInitialScores() {
+  return SUBSECTORS.reduce((acc, s) => {
+    acc[s.id] = 70;
+    return acc;
+  }, {});
+}
+
+function getInitialRaw() {
+  return SUBSECTORS.reduce((acc, s) => {
+    acc[s.id] = percentToRaw(s, 70);
+    return acc;
+  }, {});
+}
+
+export default function LifeIndexView({ state, onSaveWeek, onJumpToDay37 }) {
   const stats = useMemo(
-    () => computeIndexStats(state.weeks, state.weights),
-    [state.weeks, state.weights]
+    () => computeIndexStats(state.weeks, state.weights, state.arbaeen),
+    [state.weeks, state.weights, state.arbaeen]
   );
 
   const nextWeekDefault = useMemo(() => {
     if (state.weeks.length === 0) return 1;
-    const maxW = Math.max(...state.weeks.map((w) => w.week));
-    return Math.min(52, maxW + 1);
+    return Math.min(52, Math.max(...state.weeks.map((w) => w.week)) + 1);
   }, [state.weeks]);
 
-  const [selectedSector, setSelectedSector] = useState('total');
+  const [selectedPillar, setSelectedPillar] = useState('total');
+  const [inputMode, setInputMode] = useState('raw'); // 'raw' = أرقام صماء | 'slider' = منزلقات
   const [weekNum, setWeekNum] = useState(nextWeekDefault);
-  const [scores, setScores] = useState({
-    deen: 70,
-    learning: 70,
-    execution: 70,
-    health: 70,
-    mind: 70,
-  });
+  const [scores, setScores] = useState(getInitialScores);
+  const [rawMetrics, setRawMetrics] = useState(getInitialRaw);
   const [note, setNote] = useState('');
   const [savedMsg, setSavedMsg] = useState('');
 
@@ -35,10 +50,27 @@ export default function LifeIndexView({ state, onSaveWeek }) {
     const found = state.weeks.find((w) => w.week === wk);
     if (found) {
       setScores({ ...found.scores });
+      const derivedRaw = SUBSECTORS.reduce((acc, s) => {
+        acc[s.id] = found.rawMetrics?.[s.id] ?? percentToRaw(s, found.scores[s.id]);
+        return acc;
+      }, {});
+      setRawMetrics(derivedRaw);
       setNote(found.note || '');
     } else {
       setNote('');
     }
+  };
+
+  const handleRawChange = (sub, nextVal) => {
+    const clamped = Math.max(0, Math.min(sub.max, Number(nextVal) || 0));
+    setRawMetrics((prev) => ({ ...prev, [sub.id]: clamped }));
+    setScores((prev) => ({ ...prev, [sub.id]: rawToPercent(sub, clamped) }));
+  };
+
+  const handleSliderChange = (sub, nextPct) => {
+    const clamped = Math.max(0, Math.min(100, Number(nextPct) || 0));
+    setScores((prev) => ({ ...prev, [sub.id]: clamped }));
+    setRawMetrics((prev) => ({ ...prev, [sub.id]: percentToRaw(sub, clamped) }));
   };
 
   const handleSubmit = (e) => {
@@ -47,13 +79,14 @@ export default function LifeIndexView({ state, onSaveWeek }) {
       week: Number(weekNum),
       date: new Date().toISOString().slice(0, 10),
       scores: { ...scores },
+      rawMetrics: { ...rawMetrics },
       note: note.trim(),
     });
     setSavedMsg(`تم إغلاق الأسبوع #${weekNum} بدرجة ${liveScore}`);
     setTimeout(() => setSavedMsg(''), 3000);
   };
 
-  // تجهيز نقاط الرسم البياني
+  // الرسم البياني
   const chartW = 720;
   const chartH = 220;
   const padX = 34;
@@ -62,12 +95,12 @@ export default function LifeIndexView({ state, onSaveWeek }) {
   const innerH = chartH - padY * 2;
 
   const activeColor =
-    selectedSector === 'total'
+    selectedPillar === 'total'
       ? '#22c55e'
-      : SECTORS.find((s) => s.id === selectedSector)?.color || '#22c55e';
+      : PILLARS.find((p) => p.id === selectedPillar)?.color || '#22c55e';
 
   const points = stats.series.map((item, idx) => {
-    const val = selectedSector === 'total' ? item.total : item.scores[selectedSector];
+    const val = selectedPillar === 'total' ? item.total : item.pillars[selectedPillar];
     const x =
       stats.series.length === 1
         ? chartW / 2
@@ -90,7 +123,30 @@ export default function LifeIndexView({ state, onSaveWeek }) {
 
   return (
     <div className="stack-lg">
-      {/* بطاقات الأداء */}
+      {/* قاطع الدائرة (Circuit Breaker) وربطه بخطة اليوم 37 */}
+      {stats.circuitBreaker.active && (
+        <div className="card circuit-banner stack-sm">
+          <div className="card-head" style={{ marginBottom: 0 }}>
+            <strong className="red">⚡ تفعيل قاطع الدائرة (CIRCUIT BREAKER)</strong>
+            <span className="badge down">{stats.circuitBreaker.reasons.join(' • ')}</span>
+          </div>
+          {stats.circuitBreaker.planText ? (
+            <div className="emergency-plan">
+              <span className="xs muted">خطة الطوارئ الخاصة بك (من اليوم 37 في تحدي أربعين):</span>
+              <p className="plan-text">{stats.circuitBreaker.planText}</p>
+            </div>
+          ) : (
+            <div className="actions-row" style={{ marginTop: 4 }}>
+              <span className="xs muted">لم تكتب خطة الطوارئ في اليوم 37 بعد.</span>
+              <button type="button" className="btn btn-danger" onClick={onJumpToDay37}>
+                اكتب خطة الطوارئ الآن (اليوم 37)
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* بطاقات الأداء الرئيسية */}
       <div className="kpi-grid">
         <div className="card kpi-card">
           <span className="muted">المؤشر الحالي (LIFE-IDX)</span>
@@ -118,52 +174,89 @@ export default function LifeIndexView({ state, onSaveWeek }) {
         </div>
 
         <div className="card kpi-card">
-          <span className="muted">أدنى قاع (ATL)</span>
-          <strong className="mono kpi-val red">{stats.atl.value}</strong>
+          <span className="muted">أقصى هبوط (Max DD)</span>
+          <strong className="mono kpi-val red">-{stats.maxDrawdown}%</strong>
           <span className="xs muted">
-            {stats.atl.week ? `الأسبوع #${stats.atl.week}` : '—'}
+            الحالي من القمة: <span className="mono">-{stats.currentDrawdown}%</span>
           </span>
         </div>
       </div>
 
-      {/* التشخيص التلقائي */}
-      {stats.strongest && stats.weakest && (
-        <div className="card diag-bar">
-          <div>
-            <span className="xs muted">أقوى قطاع داعم: </span>
-            <strong style={{ color: stats.strongest.color }}>
-              {stats.strongest.name} ({stats.strongest.avg})
-            </strong>
-          </div>
-          <div>
-            <span className="xs muted">القطاع الذي يسحب المؤشر للأسفل: </span>
-            <strong style={{ color: '#ef4444' }}>
-              {stats.weakest.name} ({stats.weakest.avg})
-            </strong>
-          </div>
+      {/* محرك الدومينو (Correlation Engine) + التشخيص */}
+      <div className="card stack-sm">
+        <div className="card-head" style={{ marginBottom: 4 }}>
+          <h2>رادار الأنماط — محرك الدومينو</h2>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => exportSummaryCardPNG(stats, state)}
+            disabled={stats.count === 0}
+          >
+            تصدير بطاقة الملخص (.png)
+          </button>
         </div>
-      )}
 
-      {/* الرسم البياني */}
+        {stats.strongest && stats.weakest && (
+          <div className="diag-inline xs">
+            <span>
+              أقوى قطاع:{' '}
+              <strong style={{ color: stats.strongest.color }}>
+                {stats.strongest.name} ({stats.strongest.avg})
+              </strong>
+            </span>
+            <span>
+              أكبر نقطة ضعف:{' '}
+              <strong className="red">
+                {stats.weakest.name} ({stats.weakest.avg})
+              </strong>
+            </span>
+          </div>
+        )}
+
+        {stats.count < 4 ? (
+          <p className="xs muted">
+            محرك الدومينو يحتاج 4 أسابيع على الأقل لاكتشاف الارتباطات الخفية بين قطاعاتك (متبقي{' '}
+            {4 - stats.count} أسابيع).
+          </p>
+        ) : stats.dominoInsights.length === 0 ? (
+          <p className="xs muted">
+            لم يُرصد ارتباط شديد (&ge;65%) بين قطاعين من محورين مختلفين حتى الآن.
+          </p>
+        ) : (
+          <div className="stack-sm">
+            {stats.dominoInsights.map((ins, i) => (
+              <div key={i} className="domino-item xs">
+                <span className="badge up mono">{ins.pct}% ارتباط</span>
+                <span>
+                  حركة <strong>{ins.a.name}</strong> مرتبطة بقوة مع <strong>{ins.b.name}</strong> —
+                  عندما يهبط الأول يسحب الثاني معه مباشرة.
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* الرسم البياني للـ 5 محاور */}
       <div className="card">
         <div className="card-head">
-          <h2>منحنى الأداء السنوي</h2>
+          <h2>منحنى الأداء السنوي (5 محاور)</h2>
           <div className="chip-row">
             <button
               type="button"
-              className={`chip ${selectedSector === 'total' ? 'active' : ''}`}
-              onClick={() => setSelectedSector('total')}
+              className={`chip ${selectedPillar === 'total' ? 'active' : ''}`}
+              onClick={() => setSelectedPillar('total')}
             >
               المؤشر العام
             </button>
-            {SECTORS.map((s) => (
+            {PILLARS.map((p) => (
               <button
-                key={s.id}
+                key={p.id}
                 type="button"
-                className={`chip ${selectedSector === s.id ? 'active' : ''}`}
-                onClick={() => setSelectedSector(s.id)}
+                className={`chip ${selectedPillar === p.id ? 'active' : ''}`}
+                onClick={() => setSelectedPillar(p.id)}
               >
-                {s.name}
+                {p.name}
               </button>
             ))}
           </div>
@@ -196,26 +289,14 @@ export default function LifeIndexView({ state, onSaveWeek }) {
               })}
               {areaStr && <polygon points={areaStr} fill={activeColor} opacity="0.12" />}
               {points.length > 1 && (
-                <polyline
-                  fill="none"
-                  stroke={activeColor}
-                  strokeWidth="2.5"
-                  points={polylineStr}
-                />
+                <polyline fill="none" stroke={activeColor} strokeWidth="2.5" points={polylineStr} />
               )}
               {points.map((p) => (
                 <g key={p.week}>
                   <circle cx={p.x} cy={p.y} r="4.5" fill={activeColor} stroke="#030303" strokeWidth="1.5">
                     <title>{`الأسبوع #${p.week}: ${p.val}`}</title>
                   </circle>
-                  <text
-                    x={p.x}
-                    y={chartH - 4}
-                    textAnchor="middle"
-                    fill="#9ca3af"
-                    fontSize="10"
-                    className="mono"
-                  >
+                  <text x={p.x} y={chartH - 4} textAnchor="middle" fill="#9ca3af" fontSize="10" className="mono">
                     W{p.week}
                   </text>
                 </g>
@@ -225,106 +306,169 @@ export default function LifeIndexView({ state, onSaveWeek }) {
         )}
       </div>
 
-      {/* الخريطة الحرارية + نموذج الإغلاق الأسبوعي */}
-      <div className="two-col">
-        <div className="card">
-          <div className="card-head">
-            <h2>خريطة الـ 52 أسبوعاً</h2>
-            <span className="xs muted">اضغط على أي أسبوع لتعديله</span>
+      {/* خريطة الـ 52 أسبوعاً */}
+      <div className="card">
+        <div className="card-head">
+          <h2>خريطة الـ 52 أسبوعاً</h2>
+          <span className="xs muted">اضغط على أي أسبوع لتعديله</span>
+        </div>
+        <div className="heatmap-grid">
+          {Array.from({ length: 52 }, (_, i) => i + 1).map((wk) => {
+            const item = weekMap[wk];
+            const val = item?.total ?? null;
+            let cls = 'heat-empty';
+            if (val !== null) {
+              if (val >= 80) cls = 'heat-4';
+              else if (val >= 65) cls = 'heat-3';
+              else if (val >= 50) cls = 'heat-2';
+              else cls = 'heat-1';
+            }
+            return (
+              <button
+                key={wk}
+                type="button"
+                onClick={() => loadExistingWeek(wk)}
+                className={`heat-cell ${cls} ${weekNum === wk ? 'heat-selected' : ''}`}
+                title={val !== null ? `الأسبوع #${wk}: ${val}` : `الأسبوع #${wk}: غير مسجل`}
+              >
+                <span className="mono">{wk}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* نموذج الإغلاق الأسبوعي للـ 15 قطاعاً بوضع الأرقام الصماء أو المنزلقات */}
+      <form className="card stack-md" onSubmit={handleSubmit}>
+        <div className="card-head">
+          <div>
+            <h2>الإغلاق الأسبوعي (15 قطاعاً)</h2>
+            <span className="xs muted">اختر الأرقام الصماء لقياس موضوعي بلا تحيز عاطفي</span>
           </div>
-          <div className="heatmap-grid">
-            {Array.from({ length: 52 }, (_, i) => i + 1).map((wk) => {
-              const item = weekMap[wk];
-              const val = item?.total ?? null;
-              let cls = 'heat-empty';
-              if (val !== null) {
-                if (val >= 80) cls = 'heat-4';
-                else if (val >= 65) cls = 'heat-3';
-                else if (val >= 50) cls = 'heat-2';
-                else cls = 'heat-1';
-              }
-              return (
-                <button
-                  key={wk}
-                  type="button"
-                  onClick={() => loadExistingWeek(wk)}
-                  className={`heat-cell ${cls} ${weekNum === wk ? 'heat-selected' : ''}`}
-                  title={val !== null ? `الأسبوع #${wk}: ${val}` : `الأسبوع #${wk}: غير مسجل`}
-                >
-                  <span className="mono">{wk}</span>
-                </button>
-              );
-            })}
-          </div>
+          <div className="live-pill mono">النتيجة: {liveScore}</div>
         </div>
 
-        <form className="card" onSubmit={handleSubmit}>
-          <div className="card-head">
-            <h2>الإغلاق الأسبوعي</h2>
-            <div className="live-pill mono">النتيجة: {liveScore}</div>
-          </div>
-
-          <div className="field-inline">
-            <label htmlFor="week-input">رقم الأسبوع (1 - 52)</label>
+        <div className="close-toolbar">
+          <div className="field-inline" style={{ marginBottom: 0 }}>
+            <label htmlFor="week-input">الأسبوع:</label>
             <input
               id="week-input"
               type="number"
               min="1"
               max="52"
               value={weekNum}
-              onChange={(e) => loadExistingWeek(Math.max(1, Math.min(52, Number(e.target.value) || 1)))}
+              onChange={(e) =>
+                loadExistingWeek(Math.max(1, Math.min(52, Number(e.target.value) || 1)))
+              }
               className="input mono"
-              style={{ width: '90px' }}
+              style={{ width: '76px' }}
             />
           </div>
 
-          <div className="sliders-list">
-            {SECTORS.map((s) => (
-              <div key={s.id} className="slider-item">
-                <div className="slider-top">
-                  <span>
-                    {s.name}{' '}
-                    <span className="xs muted mono">({state.weights[s.id]}%)</span>
-                  </span>
-                  <strong className="mono" style={{ color: s.color }}>
-                    {scores[s.id]}
-                  </strong>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={scores[s.id]}
-                  onChange={(e) =>
-                    setScores((prev) => ({ ...prev, [s.id]: Number(e.target.value) }))
-                  }
-                  className="range"
-                />
-              </div>
-            ))}
-          </div>
-
-          <div className="field">
-            <label htmlFor="week-note">ملخص صريح للأسبوع (ماذا نجح وماذا انكسر؟)</label>
-            <textarea
-              id="week-note"
-              rows={3}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="اكتب أسباب الصعود أو الهبوط بدون تبرير..."
-              className="textarea"
-            />
-          </div>
-
-          <div className="actions-row">
-            <button type="submit" className="btn btn-primary">
-              حفظ إغلاق الأسبوع #{weekNum}
+          <div className="chip-row">
+            <button
+              type="button"
+              className={`chip ${inputMode === 'raw' ? 'active' : ''}`}
+              onClick={() => setInputMode('raw')}
+            >
+              أرقام صماء (موضوعي)
             </button>
-            {savedMsg && <span className="xs green">{savedMsg}</span>}
+            <button
+              type="button"
+              className={`chip ${inputMode === 'slider' ? 'active' : ''}`}
+              onClick={() => setInputMode('slider')}
+            >
+              منزلقات سريعة
+            </button>
           </div>
-        </form>
-      </div>
+        </div>
+
+        <div className="pillars-form-grid">
+          {PILLARS.map((pillar) => {
+            const subs = SUBSECTORS.filter((s) => s.pillarId === pillar.id);
+            return (
+              <div key={pillar.id} className="pillar-box stack-sm">
+                <div className="pillar-head" style={{ borderRightColor: pillar.color }}>
+                  <strong>{pillar.name}</strong>
+                </div>
+
+                {subs.map((sub) => (
+                  <div key={sub.id} className="metric-row">
+                    <div className="slider-top">
+                      <div>
+                        <span>{sub.name}</span>{' '}
+                        <span className="xs muted mono">({state.weights[sub.id]}%)</span>
+                      </div>
+                      <strong className="mono" style={{ color: pillar.color }}>
+                        {scores[sub.id]}%
+                      </strong>
+                    </div>
+
+                    {inputMode === 'raw' && sub.inputType === 'raw' ? (
+                      <div className="raw-control">
+                        <span className="xs muted">{sub.unit}</span>
+                        <div className="stepper">
+                          <button
+                            type="button"
+                            className="step-btn"
+                            onClick={() => handleRawChange(sub, (rawMetrics[sub.id] || 0) - 1)}
+                          >
+                            −
+                          </button>
+                          <input
+                            type="number"
+                            min="0"
+                            max={sub.max}
+                            value={rawMetrics[sub.id] ?? 0}
+                            onChange={(e) => handleRawChange(sub, e.target.value)}
+                            className="input mono step-input"
+                          />
+                          <button
+                            type="button"
+                            className="step-btn"
+                            onClick={() => handleRawChange(sub, (rawMetrics[sub.id] || 0) + 1)}
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={scores[sub.id]}
+                        onChange={(e) => handleSliderChange(sub, e.target.value)}
+                        className="range"
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="field">
+          <label htmlFor="week-note">ملخص صريح للأسبوع (ماذا نجح وماذا انكسر؟)</label>
+          <textarea
+            id="week-note"
+            rows={3}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="اكتب أسباب الصعود أو الهبوط بدون تبرير..."
+            className="textarea"
+          />
+        </div>
+
+        <div className="actions-row">
+          <button type="submit" className="btn btn-primary">
+            حفظ إغلاق الأسبوع #{weekNum}
+          </button>
+          {savedMsg && <span className="xs green">{savedMsg}</span>}
+        </div>
+      </form>
     </div>
   );
 }
